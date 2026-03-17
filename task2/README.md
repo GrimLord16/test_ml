@@ -1,0 +1,247 @@
+# Task 2 — Named Entity Recognition + Image Classification Pipeline
+
+## Project Description
+
+This project implements an end-to-end ML pipeline that:
+
+1. Takes a **natural language sentence** (e.g. *"There is a zebra in the picture."*) and an **image**.
+2. Runs an **NER model** (fine-tuned DistilBERT) to extract the animal name from the text.
+3. Runs an **image classifier** (fine-tuned ResNet-18) to identify the animal shown in the image.
+4. Returns **True** if the animal in the text matches the animal in the image, **False** otherwise.
+
+### Dataset — Mammals-45
+
+The image classifier is trained on the **Mammals-45** dataset: 45 mammal species with English folder names.
+
+
+## Setup
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Dataset Setup — Mammals-45 from Kaggle
+
+```bash
+# Authenticate (one-time setup — place kaggle.json in ~/.kaggle/)
+kaggle datasets download -d asaniczka/mammals-image-classification-dataset-45-animals
+unzip mammals-image-classification-dataset-45-animals.zip -d mammals45
+```
+
+After extraction the dataset root should look like:
+
+```
+mammals45/mammals
+├── antelope/
+├── badger/
+├── bat/
+├── bear/
+├── bison/
+├── ... (45 mammal class folders total)
+└── zebra/
+```
+
+
+---
+
+## NER Model
+
+### Training
+
+```bash
+cd task2/ner
+
+# Default settings
+python train.py
+
+# Custom settings
+python train.py \
+    --model_name distilbert-base-uncased \
+    --output_dir ./ner_model \
+    --num_epochs 10 \
+    --batch_size 16 \
+    --learning_rate 2e-5 \
+    --n_samples 5000
+```
+
+The trained model is saved to `./ner_model/` (or your `--output_dir`).
+
+### Inference
+
+```bash
+cd task2/ner
+
+python inference.py \
+    --model_dir ./ner_model \
+    --text "There is a zebra in the picture."
+```
+
+**Expected output:**
+
+```
+Input text : "There is a zebra in the picture."
+All animals found : ['zebra']
+Primary prediction : zebra
+```
+
+### Using `AnimalNER`
+
+```python
+from ner.inference import AnimalNER
+
+ner = AnimalNER(model_dir="./ner/ner_model")
+
+# Returns a list of all animal names found in the text
+animals = ner.extract_animals("I can see a polar bear here.")
+# → ['polar bear']
+
+# Returns the first (most prominent) animal or None
+animal = ner.predict("There is a tiger in the picture.")
+# → 'tiger'
+```
+
+---
+
+## Image Classification Model
+
+### Training
+
+```bash
+cd task2/image_classification
+
+# Default settings
+python train.py \
+    --data_dir ./mammals45
+
+# Custom settings
+python train.py \
+    --data_dir ./mammals45 \
+    --output_dir ./animal_classifier \
+    --num_epochs 20 \
+    --batch_size 32 \
+    --learning_rate 1e-4 \
+    --img_size 224
+
+# Basically to provide mapping for our pipeline
+python mapping.py
+```
+
+Saved artefacts in `./animal_classifier/`:
+- `best_model.pth` — model weights with best validation accuracy
+- `class_mapping.json` — index → class name mapping (auto-generated from folder names)
+
+### Inference
+
+```bash
+cd task2/image_classification
+
+python inference.py \
+    --model_dir ./animal_classifier \
+    --image_path /path/to/image.jpg
+```
+
+**Expected output:**
+
+```
+Image       : /path/to/image.jpg
+Prediction  : zebra
+
+Top-5 class probabilities:
+  1. zebra        0.9512
+  2. horse        0.0231
+  3. deer         0.0087
+  4. antelope     0.0062
+  5. bison        0.0039
+```
+
+### Using `AnimalClassifier`
+
+```python
+from image_classification.inference import AnimalClassifier
+
+clf = AnimalClassifier(model_dir="./image_classification/animal_classifier")
+
+# Single predicted class name
+label = clf.predict("zebra.jpg")
+# → 'zebra'
+
+# Full probability distribution
+probs = clf.predict_proba("zebra.jpg")
+# → {'zebra': 0.9512, 'horse': 0.0231, ...}
+```
+
+---
+
+## End-to-End Pipeline
+
+### Running the Pipeline
+
+```bash
+cd task2
+
+python pipeline.py \
+    --text "There is a zebra here." \
+    --image /path/to/zebra.jpg
+
+# Custom model paths
+python pipeline.py \
+    --text "I can see a bear in this picture." \
+    --image /path/to/bear.jpg \
+    --ner_model_dir ./ner/ner_model \
+    --classifier_model_dir ./image_classification/animal_classifier
+```
+
+**Expected output:**
+
+```
+Extracted animal (text) : 'zebra'  →  normalized: 'zebra'
+Predicted animal (image): 'zebra'  →  normalized: 'zebra'
+Match: True
+
+Result: True
+```
+
+### Using `AnimalVerificationPipeline`\
+
+```python
+from pipeline import AnimalVerificationPipeline
+
+pipeline = AnimalVerificationPipeline(
+    ner_model_dir="./ner/ner_model",
+    classifier_model_dir="./image_classification/animal_classifier",
+)
+
+result = pipeline.run(
+    text="There is a bear in the picture.",
+    image_path="bear.jpg",
+)
+# result → True or False
+```
+
+---
+
+## Exploratory Data Analysis
+
+Open and run the EDA notebook to explore the Mammals-45 dataset:
+
+```bash
+cd task2
+jupyter notebook eda.ipynb
+```
+
+The notebook covers:
+- Dataset structure (image counts per class)
+- Sample images from each class
+- Image size and resolution distribution
+- Color histogram analysis per class
+
+---
+
+## Notes
+
+- The NER model is trained on **synthetic data** (generated by `ner/data_utils.py`) using sentence templates and the Mammals-45 class names as entities. For production use, consider augmenting with real-world annotated corpora.
+- Plural normalization (e.g. *wolves → wolf*) is handled by a rule-based function in `pipeline.py`.
+- The image classifier class list is **auto-discovered** from the dataset folder structure — no hardcoded class names.
+- A GPU is strongly recommended for training. Inference runs on CPU without issues.
